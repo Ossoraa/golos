@@ -7,7 +7,7 @@ from gtts import gTTS
 import uuid
 import os
 
-from mmm import process_query, recognize_speech, confirm_transfer
+from golos.mmm import process_query, recognize_speech, confirm_transfer
 
 app = FastAPI()
 
