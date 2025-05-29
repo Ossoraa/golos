@@ -3,11 +3,11 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from gtts import gTTS
+from tts_silero import silero_tts
 import uuid
 import os
 
-from golos.mmm import process_query, recognize_speech, confirm_transfer
+from mmm import process_query, recognize_speech, confirm_transfer, speak_text
 
 app = FastAPI()
 
@@ -17,7 +17,6 @@ class MessageRequest(BaseModel):
 is_speaking = False
 confirmation_context = {"awaiting": False, "amount": None, "contact": None}
 
-# CORS + static
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -28,30 +27,25 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 os.makedirs("static", exist_ok=True)
 
-def speak_text(text: str) -> str:
-    global is_speaking
-    is_speaking = True
-    filename = f"static/audio_{uuid.uuid4()}.mp3"
-    tts = gTTS(text=text.strip(), lang='ru')
-    tts.save(filename)
-    is_speaking = False
-    return filename
-
 @app.post("/api/message")
 async def handle_text(request: MessageRequest):
     global confirmation_context
     text = request.text.strip().lower()
 
     if confirmation_context["awaiting"] and text in ["да", "подтверждаю", "ок"]:
-        response_text = confirm_transfer(
+        result = confirm_transfer(
             confirmation_context["amount"],
             confirmation_context["contact"]
         )
         confirmation_context = {"awaiting": False, "amount": None, "contact": None}
-        audio_path = speak_text(response_text)
+        try:
+            audio_path = speak_text(result["message"])
+        except Exception as e:
+            print("Ошибка озвучки:", e)
+            audio_path = None
         return {
-            "answer": response_text,
-            "audio_url": f"http://localhost:8000/{audio_path}"
+            "answer": result["message"],
+            "audio_url": f"http://localhost:8000/{audio_path}" if audio_path else None
         }
 
     result = process_query(text)
@@ -59,19 +53,21 @@ async def handle_text(request: MessageRequest):
     if isinstance(result, dict) and result.get("status") == "confirmation_needed":
         confirmation_context = {
             "awaiting": True,
-            "amount": result["amount"],
-            "contact": result["contact"]
+            "amount": result.get("data", {}).get("amount"),
+            "contact": result.get("data", {}).get("contact")
         }
         return {"answer": result["message"], "audio_url": None}
 
-    if isinstance(result, dict) and "message" in result:
-        response_text = result["message"]
-    else:
-        response_text = str(result)
-    audio_path = speak_text(response_text)
+    response_text = result["message"] if isinstance(result, dict) and "message" in result else str(result)
+    try:
+        audio_path = speak_text(response_text)
+    except Exception as e:
+        print("Ошибка озвучки:", e)
+        audio_path = None
+
     return {
         "answer": response_text,
-        "audio_url": f"http://localhost:8000/{audio_path}"
+        "audio_url": f"http://localhost:8000/{audio_path}" if audio_path else None
     }
 
 @app.post("/api/chat/voice")
@@ -93,11 +89,16 @@ async def handle_voice(audio_file: UploadFile = File(...)):
         }
 
     response_text = result["message"] if isinstance(result, dict) and "message" in result else str(result)
-    audio_path = speak_text(response_text)
+    try:
+        audio_path = speak_text(response_text)
+    except Exception as e:
+        print("Ошибка озвучки:", e)
+        audio_path = None
+
     return {
         "question": question,
         "answer": response_text,
-        "audio_url": f"http://localhost:8000/{audio_path}"
+        "audio_url": f"http://localhost:8000/{audio_path}" if audio_path else None
     }
 
 @app.get("/api/speaking")
